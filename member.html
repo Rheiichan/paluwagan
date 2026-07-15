@@ -143,7 +143,23 @@ if (savedId) {
 /* ---------- Boot & data loading ---------- */
 async function boot(memberId){
   const { data: meRow, error: meErr } = await sb.from("paluwagan_members").select("*").eq("id", memberId).maybeSingle();
-  if (meErr || !meRow) { logout(); return; }
+
+  if (meErr) {
+    // Connection hiccup — don't clear their saved login, just let them retry.
+    document.getElementById("app").innerHTML = `
+      <div class="login-box">
+        <h2>Connection problem</h2>
+        <p>Couldn't reach the ledger. Check your internet connection.</p>
+        <button class="primary" style="width:100%" onclick="location.reload()">Try again</button>
+      </div>`;
+    return;
+  }
+  if (!meRow) {
+    // Account genuinely no longer exists (e.g. admin removed this member).
+    logout();
+    return;
+  }
+
   me = meRow;
   await loadAll();
 }
