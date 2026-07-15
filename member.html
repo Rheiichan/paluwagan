@@ -346,7 +346,7 @@ function renderCalendar(months, count, payout, curIdx){
           <div class="date-chip ${c15 === count ? 'complete' : 'incomplete'}"><div class="d">15</div><div class="lbl">Collection</div><div class="prog">${c15}/${count} paid</div></div>
           <div class="date-chip ${c30 === count ? 'complete' : 'incomplete'}"><div class="d">30</div><div class="lbl">Collection + Payout</div><div class="prog">${c30}/${count} paid</div></div>
         </div>
-        <div class="cal-recipient"><span class="who">💰 ${recipient ? recipient.name + (isMe ? ' (you)' : '') : '—'}</span><span class="amt">₱${payout.toLocaleString()}</span></div>
+        <div class="cal-recipient"><span class="who">💵 ${recipient ? recipient.name + (isMe ? ' (you)' : '') : '—'}</span><span class="amt">₱${payout.toLocaleString()}</span></div>
         ${recipient && recipient.payout_paid ? '<div style="margin-top:8px"><span class="stamp">RELEASED</span></div>' : ''}
       </div>`;
     grid.appendChild(card);
