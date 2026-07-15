@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Paluwagan Ledger — My Status</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto+Slab:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+
+<!-- ================= LOGIN ================= -->
+<div class="login-box" id="loginBox">
+  <h2>Member Login</h2>
+  <p>Enter your username and password to see your paluwagan status.</p>
+  <input id="loginUser" type="text" placeholder="Username" autocomplete="username">
+  <input id="loginPass" type="password" placeholder="Password" autocomplete="current-password">
+  <div class="err" id="loginErr"></div>
+  <button class="primary" style="width:100%" onclick="tryLogin()">Log in</button>
+</div>
+
+<!-- ================= APP ================= -->
+<div class="wrap" id="app" style="display:none">
+
+  <header class="cover">
+    <div class="cover-top">
+      <div>
+        <p class="eyebrow">Community Savings Ledger</p>
+        <h1>Paluwagan Tracker</h1>
+        <p class="cover-sub">Your personal payment status and the group's shared ledger.</p>
+      </div>
+      <div style="display:flex; flex-direction:column; align-items:flex-end; gap:8px">
+        <div class="cover-stamp">Cycle No.<b id="cycleNo">—</b></div>
+        <button class="ghost" style="background:transparent; border-color:rgba(255,255,255,.3); color:#C7D6E5" onclick="logout()">Log out</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="greeting-card" id="greetingCard"></div>
+
+  <div class="pay-section" id="paySection"></div>
+
+  <div class="summary-grid" id="myStatus"></div>
+
+  <nav class="tabs">
+    <button class="active" data-tab="calendar" onclick="switchTab('calendar')">Calendar</button>
+    <button data-tab="tracker" onclick="switchTab('tracker')">Payment Tracker</button>
+    <button data-tab="schedule" onclick="switchTab('schedule')">Payout Schedule</button>
+  </nav>
+
+  <section class="panel active" id="panel-calendar">
+    <h3 class="section-title">Cycle Calendar</h3>
+    <div class="cal-grid" id="calGrid"></div>
+  </section>
+
+  <section class="panel" id="panel-tracker">
+    <h3 class="section-title">Payment Tracker — group view</h3>
+    <div class="tracker-scroll">
+      <table class="tracker" id="trackerTable"></table>
+    </div>
+    <div class="legend">
+      <span><span class="sw" style="background:var(--green)"></span>Paid</span>
+      <span><span class="sw" style="background:#EEE"></span>Not yet paid</span>
+      <span>Your row is highlighted in gold.</span>
+    </div>
+  </section>
+
+  <section class="panel" id="panel-schedule">
+    <h3 class="section-title">Payout Schedule</h3>
+    <table>
+      <thead><tr><th>#</th><th>Month</th><th>Recipient</th><th>Payout</th><th>Status</th></tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </section>
+
+  <footer class="note">You can record your own payments here. Only the admin can undo a recorded payment.</footer>
+</div>
+
+<!-- ================= PAY MODAL ================= -->
+<div class="modal-overlay" id="payModal" style="display:none">
+  <div class="modal-box">
+    <h3 id="modalTitle">Record Payment</h3>
+    <p class="modal-sub" id="modalSub"></p>
+    <input id="payAmount" type="number" placeholder="Amount paid">
+    <div class="modal-warn" id="payWarn"></div>
+    <div class="modal-actions">
+      <button class="ghost" onclick="closePayModal()">Cancel</button>
+      <button class="primary" id="payConfirmBtn" onclick="confirmPayment()">Record payment</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============ CONFIG — paste your Supabase project values here ============ */
+const SUPABASE_URL = "https://wntptuihcrmabvaxznxm.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndudHB0dWloY3JtYWJ2YXh6bnhtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQxMjkxMTcsImV4cCI6MjA5OTcwNTExN30.2L8yhWRvkifgENiQC_RK_1IosOSR74Lp3Lf-M_eXbkQ";
+/* ============================================================================ */
+
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+let settingsRow = null;
+let members = [];
+let contribMap = {};
+let me = null;
+let pendingCutoff = null;
+
+/* ---------- Login ---------- */
+async function tryLogin(){
+  const u = document.getElementById("loginUser").value.trim();
+  const p = document.getElementById("loginPass").value;
+  const errEl = document.getElementById("loginErr");
+  if (!u || !p) { errEl.textContent = "Enter both username and password."; return; }
+
+  const { data, error } = await sb.from("paluwagan_members")
+    .select("*").ilike("username", u).maybeSingle();
+
+  if (error || !data || data.password !== p) {
+    errEl.textContent = "Incorrect username or password.";
+    return;
+  }
+  localStorage.setItem("plwgn_member_id", data.id);
+  document.getElementById("loginBox").style.display = "none";
+  document.getElementById("app").style.display = "block";
+  boot(data.id);
+}
+document.getElementById("loginPass").addEventListener("keydown", e => { if (e.key === "Enter") tryLogin(); });
+
+function logout(){
+  localStorage.removeItem("plwgn_member_id");
+  location.reload();
+}
+
+const savedId = localStorage.getItem("plwgn_member_id");
+if (savedId) {
+  document.getElementById("loginBox").style.display = "none";
+  document.getElementById("app").style.display = "block";
+  boot(savedId);
+}
+
+/* ---------- Boot & data loading ---------- */
+async function boot(memberId){
+  const { data: meRow, error: meErr } = await sb.from("paluwagan_members").select("*").eq("id", memberId).maybeSingle();
+  if (meErr || !meRow) { logout(); return; }
+  me = meRow;
+  await loadAll();
+}
+
+async function loadAll(){
+  const { data: s } = await sb.from("paluwagan_settings").select("*").eq("id", 1).single();
+  settingsRow = s;
+
+  const { data: m } = await sb.from("paluwagan_members").select("*").order("order_index", { ascending: true });
+  members = m || [];
+  me = members.find(x => x.id === me.id) || me;
+
+  const { data: c } = await sb.from("paluwagan_contributions").select("*");
+  contribMap = {};
+  (c || []).forEach(row => { contribMap[row.month_index + ":" + row.member_id] = row; });
+
+  render();
+}
+
+/* ---------- Helpers ---------- */
+function getMonths(count){
+  const d = settingsRow.start_month ? new Date(settingsRow.start_month + "-01") : new Date();
+  const list = [];
+  for (let i = 0; i < count; i++) list.push(new Date(d.getFullYear(), d.getMonth() + i, 1));
+  return list;
+}
+
+function currentMonthIndex(count){
+  if (!settingsRow.start_month || count === 0) return 0;
+  const s = new Date(settingsRow.start_month + "-01");
+  const now = new Date();
+  const diff = (now.getFullYear() - s.getFullYear()) * 12 + (now.getMonth() - s.getMonth());
+  return Math.min(Math.max(diff, 0), count - 1);
+}
+
+function getTimeGreeting(){
+  const h = new Date().getHours();
+  if (h < 12) return "Good Morning";
+  if (h < 18) return "Good Afternoon";
+  return "Good Evening";
+}
+
+function switchTab(tab){
+  document.querySelectorAll("nav.tabs button").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
+  document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
+  document.getElementById("panel-" + tab).classList.add("active");
+}
+
+/* ---------- Payment modal ---------- */
+function openPayModal(cutoff){
+  pendingCutoff = cutoff;
+  const label = cutoff === "c15" ? "15th" : "30th";
+  document.getElementById("modalTitle").textContent = "Record your " + label + " payment";
+  document.getElementById("modalSub").textContent = `Expected contribution: ₱${Number(settingsRow.amount).toLocaleString()}`;
+  document.getElementById("payAmount").value = settingsRow.amount;
+  document.getElementById("payWarn").textContent = "";
+  document.getElementById("payConfirmBtn").textContent = "Record payment";
+  document.getElementById("payModal").style.display = "flex";
+  document.getElementById("payAmount").oninput = checkAmount;
+}
+
+function checkAmount(){
+  const val = Number(document.getElementById("payAmount").value) || 0;
+  const expected = Number(settingsRow.amount) || 0;
+  const warn = document.getElementById("payWarn");
+  const btn = document.getElementById("payConfirmBtn");
+  if (val > 0 && val < expected) {
+    warn.textContent = `⚠ This is ₱${(expected - val).toLocaleString()} short of the ₱${expected.toLocaleString()} contribution.`;
+    btn.textContent = `Record ₱${val.toLocaleString()} anyway`;
+  } else {
+    warn.textContent = "";
+    btn.textContent = "Record payment";
+  }
+}
+
+function closePayModal(){
+  document.getElementById("payModal").style.display = "none";
+  pendingCutoff = null;
+}
+
+async function confirmPayment(){
+  const val = Number(document.getElementById("payAmount").value) || 0;
+  if (val <= 0) { document.getElementById("payWarn").textContent = "Enter a valid amount."; return; }
+
+  const curIdx = currentMonthIndex(members.length);
+  const key = curIdx + ":" + me.id;
+  const existing = contribMap[key];
+  const row = {
+    member_id: me.id,
+    month_index: curIdx,
+    c15: existing ? existing.c15 : false,
+    c30: existing ? existing.c30 : false,
+    c15_amount: existing ? existing.c15_amount : 0,
+    c30_amount: existing ? existing.c30_amount : 0
+  };
+  row[pendingCutoff] = true;
+  row[pendingCutoff + "_amount"] = val;
+
+  const { data, error } = await sb.from("paluwagan_contributions")
+    .upsert(row, { onConflict: "member_id,month_index" })
+    .select().single();
+
+  if (!error) { contribMap[key] = data; closePayModal(); render(); }
+  else { document.getElementById("payWarn").textContent = "Could not record payment. Try again."; }
+}
+
+/* ---------- Render ---------- */
+function render(){
+  const amt = Number(settingsRow.amount) || 0;
+  const count = members.length;
+  const collection = count * amt;
+  const payout = collection * 2;
+  const months = getMonths(count);
+  const curIdx = currentMonthIndex(count);
+
+  document.getElementById("cycleNo").textContent = count ? (curIdx + 1) + " / " + count : "—";
+
+  const myPos = members.findIndex(m => m.id === me.id);
+  const isMyPayoutMonth = myPos === curIdx;
+  const myMonthLabel = myPos >= 0 && months[myPos] ? months[myPos].toLocaleString('en-US', { month: 'long', year: 'numeric' }) : "—";
+
+  document.getElementById("greetingCard").innerHTML = `
+    <div>
+      <div class="hi">${getTimeGreeting()}, ${me.name}!</div>
+      <div class="sub">${isMyPayoutMonth ? "This month is your payout month! 🎉" : "Your payout month is " + myMonthLabel + "."}</div>
+    </div>
+    ${isMyPayoutMonth ? `<div class="payout-flag">${me.payout_paid ? "Payout released ✓" : "Payout pending"}</div>` : ""}
+  `;
+
+  const myRow = contribMap[curIdx + ":" + me.id];
+  document.getElementById("paySection").innerHTML = `
+    <button class="pay-btn ${myRow && myRow.c15 ? 'done' : ''}" ${myRow && myRow.c15 ? 'disabled' : ''} onclick="openPayModal('c15')">
+      <div class="t">15th Cutoff</div>
+      <div class="v">${myRow && myRow.c15 ? '✓ Paid ₱' + (myRow.c15_amount || 0).toLocaleString() : 'Tap to record payment'}</div>
+    </button>
+    <button class="pay-btn ${myRow && myRow.c30 ? 'done' : ''}" ${myRow && myRow.c30 ? 'disabled' : ''} onclick="openPayModal('c30')">
+      <div class="t">30th Cutoff</div>
+      <div class="v">${myRow && myRow.c30 ? '✓ Paid ₱' + (myRow.c30_amount || 0).toLocaleString() : 'Tap to record payment'}</div>
+    </button>
+  `;
+
+  let c15Count = 0, c30Count = 0, amt15 = 0, amt30 = 0;
+  members.forEach(m => {
+    const row = contribMap[curIdx + ":" + m.id];
+    if (row && row.c15) c15Count++;
+    if (row && row.c30) c30Count++;
+    amt15 += (row && row.c15_amount) || 0;
+    amt30 += (row && row.c30_amount) || 0;
+  });
+  const totalCollected = amt15 + amt30;
+
+  document.getElementById("myStatus").innerHTML = `
+    <div class="stat"><div class="lbl">15th Collection</div><div class="val">₱${amt15.toLocaleString()} <span style="font-size:12px;color:var(--muted)">/ ₱${collection.toLocaleString()}</span></div><div class="sub">${c15Count} / ${count} paid</div></div>
+    <div class="stat"><div class="lbl">30th Collection</div><div class="val">₱${amt30.toLocaleString()} <span style="font-size:12px;color:var(--muted)">/ ₱${collection.toLocaleString()}</span></div><div class="sub">${c30Count} / ${count} paid</div></div>
+    <div class="stat"><div class="lbl">Collected This Cycle</div><div class="val">₱${totalCollected.toLocaleString()} <span style="font-size:12px;color:var(--muted)">/ ₱${payout.toLocaleString()}</span></div><div class="sub">toward this month's payout</div></div>
+    <div class="stat"><div class="lbl">Your Payout Amount</div><div class="val green">₱${payout.toLocaleString()}</div><div class="sub">${myMonthLabel}</div></div>
+  `;
+
+  renderCalendar(months, count, payout, curIdx);
+  renderTracker(months, count);
+  renderSchedule(months, count, payout);
+}
+
+function renderCalendar(months, count, payout, curIdx){
+  const grid = document.getElementById("calGrid");
+  grid.innerHTML = "";
+  months.forEach((dt, i) => {
+    const monthLabel = dt.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+    let c15 = 0, c30 = 0;
+    members.forEach(m => { const r = contribMap[i + ":" + m.id]; if (r && r.c15) c15++; if (r && r.c30) c30++; });
+    const recipient = members[i];
+    const isMe = recipient && recipient.id === me.id;
+    const card = document.createElement("div");
+    card.className = "cal-card" + (isMe ? " me" : "");
+    card.innerHTML = `
+      <div class="cal-head"><span class="m">${monthLabel}</span><span class="n">${i === curIdx ? 'CURRENT' : 'Month ' + (i + 1)}</span></div>
+      <div class="cal-body">
+        <div class="cal-dates">
+          <div class="date-chip ${c15 === count ? 'complete' : 'incomplete'}"><div class="d">15</div><div class="lbl">Collection</div><div class="prog">${c15}/${count} paid</div></div>
+          <div class="date-chip ${c30 === count ? 'complete' : 'incomplete'}"><div class="d">30</div><div class="lbl">Collection + Payout</div><div class="prog">${c30}/${count} paid</div></div>
+        </div>
+        <div class="cal-recipient"><span class="who">💰 ${recipient ? recipient.name + (isMe ? ' (you)' : '') : '—'}</span><span class="amt">₱${payout.toLocaleString()}</span></div>
+        ${recipient && recipient.payout_paid ? '<div style="margin-top:8px"><span class="stamp">RELEASED</span></div>' : ''}
+      </div>`;
+    grid.appendChild(card);
+  });
+}
+
+function renderTracker(months, count){
+  const table = document.getElementById("trackerTable");
+  let head1 = `<tr><th class="member-col" rowspan="2">Member</th>`;
+  let head2 = `<tr>`;
+  months.forEach(dt => {
+    head1 += `<th colspan="2">${dt.toLocaleString('en-US', { month: 'short', year: '2-digit' })}</th>`;
+    head2 += `<th class="month-group-label">15</th><th class="month-group-label">30</th>`;
+  });
+  head1 += `</tr>`; head2 += `</tr>`;
+
+  let body = "";
+  members.forEach(m => {
+    body += `<tr class="${m.id === me.id ? 'me-row' : ''}"><td class="member-col">${m.name}${m.id === me.id ? ' (you)' : ''}</td>`;
+    months.forEach((dt, i) => {
+      const r = contribMap[i + ":" + m.id];
+      body += `<td><span class="cutoff-dot ${r && r.c15 ? 'on' : ''}">15</span></td>`;
+      body += `<td><span class="cutoff-dot ${r && r.c30 ? 'on' : ''}">30</span></td>`;
+    });
+    body += `</tr>`;
+  });
+  table.innerHTML = `<thead>${head1}${head2}</thead><tbody>${body}</tbody>`;
+}
+
+function renderSchedule(months, count, payout){
+  const tbody = document.getElementById("tbody");
+  tbody.innerHTML = "";
+  members.forEach((m, i) => {
+    const monthLabel = months[i].toLocaleString('en-US', { month: 'long', year: 'numeric' });
+    tbody.innerHTML += `
+      <tr class="${m.payout_paid ? 'paid-row' : ''} ${m.id === me.id ? 'me-row' : ''}">
+        <td>${i + 1}</td><td>${monthLabel}</td><td>${m.name}${m.id === me.id ? ' (you)' : ''}</td>
+        <td class="amount-cell">₱${payout.toLocaleString()}</td>
+        <td><span class="status-pill ${m.payout_paid ? 'paid' : 'pending'}">${m.payout_paid ? '✓ Paid' : 'Pending'}</span></td>
+      </tr>`;
+  });
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Paluwagan Ledger — Admin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto+Slab:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+
+<!-- ================= PASSWORD GATE ================= -->
+<div class="gate" id="gate">
+  <h2>Admin Access</h2>
+  <p>Enter the admin password to edit the ledger.</p>
+  <input id="pwInput" type="password" placeholder="Admin password">
+  <div class="err" id="pwErr"></div>
+  <button class="primary" style="width:100%" onclick="tryUnlock()">Unlock</button>
+</div>
+
+<!-- ================= MAIN APP ================= -->
+<div class="wrap" id="app" style="display:none">
+
+  <header class="cover">
+    <div class="cover-top">
+      <div>
+        <p class="eyebrow">Community Savings Ledger · Admin</p>
+        <h1>Paluwagan Tracker</h1>
+        <p class="cover-sub">Rotating contribution &amp; payout record — 15th collection, 30th collection + payout.</p>
+      </div>
+      <div class="cover-stamp">Cycle No.<b id="cycleNo">—</b></div>
+    </div>
+    <div class="settings-row">
+      <div class="setting">
+        <label>Contribution / Cutoff</label>
+        <input id="amount" type="number">
+      </div>
+      <div class="setting">
+        <label>Start Month</label>
+        <input id="start" type="month">
+      </div>
+      <div class="setting">
+        <label>Admin</label>
+        <input type="text" value="Change password" readonly style="cursor:pointer" onclick="changePassword()">
+      </div>
+    </div>
+  </header>
+
+  <div class="summary-grid" id="summary"></div>
+
+  <nav class="tabs">
+    <button class="active" data-tab="overview" onclick="switchTab('overview')">Overview</button>
+    <button data-tab="calendar" onclick="switchTab('calendar')">Calendar</button>
+    <button data-tab="tracker" onclick="switchTab('tracker')">Payment Tracker</button>
+    <button data-tab="accounts" onclick="switchTab('accounts')">Member Accounts</button>
+  </nav>
+
+  <section class="panel active" id="panel-overview">
+    <h3 class="section-title">Members</h3>
+    <div class="add-row">
+      <input id="member" type="text" placeholder="Member name">
+      <button class="primary" onclick="addMember()">＋ Add member</button>
+      <button onclick="randomize()">🎲 Randomize order</button>
+      <button onclick="applyManualOrder()">Save order</button>
+    </div>
+    <div id="memberList"></div>
+
+    <h3 class="section-title" style="margin-top:24px">Payout Schedule</h3>
+    <table>
+      <thead><tr><th>#</th><th>Month</th><th>Recipient</th><th>Payout</th><th>Status</th></tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </section>
+
+  <section class="panel" id="panel-calendar">
+    <h3 class="section-title">Cycle Calendar</h3>
+    <div class="cal-grid" id="calGrid"></div>
+  </section>
+
+  <section class="panel" id="panel-tracker">
+    <h3 class="section-title">Payment Tracker — who has paid each cutoff</h3>
+    <div class="tracker-scroll">
+      <table class="tracker" id="trackerTable"></table>
+    </div>
+    <div class="legend">
+      <span><span class="sw" style="background:var(--green)"></span>Paid</span>
+      <span><span class="sw" style="background:#EEE"></span>Not yet paid</span>
+      <span>Click a cutoff cell to toggle it.</span>
+    </div>
+  </section>
+
+  <section class="panel" id="panel-accounts">
+    <h3 class="section-title">Member login accounts</h3>
+    <p style="color:var(--muted); font-size:13px; margin-top:-6px">Each member logs in at <code>member.html</code> with their username and password below. Share these with them directly. Edit and click Save to change either one.</p>
+    <div id="accountsList"></div>
+  </section>
+
+  <footer class="note">Shared cloud ledger — changes sync for everyone with a member link.</footer>
+</div>
+
+<script>
+/* ============ CONFIG — paste your Supabase project values here ============ */
+const SUPABASE_URL = "https://wntptuihcrmabvaxznxm.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndudHB0dWloY3JtYWJ2YXh6bnhtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQxMjkxMTcsImV4cCI6MjA5OTcwNTExN30.2L8yhWRvkifgENiQC_RK_1IosOSR74Lp3Lf-M_eXbkQ";
+/* ============================================================================ */
+
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+let settingsRow = null;   // { id, amount, start_month, admin_password }
+let members = [];         // sorted by order_index
+let contribMap = {};      // key `${month_index}:${member_id}` -> row
+
+/* ---------- Auth gate ---------- */
+async function tryUnlock(){
+  const pw = document.getElementById("pwInput").value;
+  const { data, error } = await sb.from("paluwagan_settings").select("admin_password").eq("id", 1).single();
+  if (error) { document.getElementById("pwErr").textContent = "Could not reach the database. Check your Supabase config."; return; }
+  if (pw && pw === data.admin_password) {
+    sessionStorage.setItem("plwgn_admin", "1");
+    document.getElementById("gate").style.display = "none";
+    document.getElementById("app").style.display = "block";
+    boot();
+  } else {
+    document.getElementById("pwErr").textContent = "Incorrect password.";
+  }
+}
+document.getElementById("pwInput").addEventListener("keydown", e => { if (e.key === "Enter") tryUnlock(); });
+
+if (sessionStorage.getItem("plwgn_admin") === "1") {
+  document.getElementById("gate").style.display = "none";
+  document.getElementById("app").style.display = "block";
+  boot();
+}
+
+async function changePassword(){
+  const next = prompt("New admin password:");
+  if (!next) return;
+  const { error } = await sb.from("paluwagan_settings").update({ admin_password: next }).eq("id", 1);
+  if (error) alert("Could not update password.");
+  else alert("Admin password updated.");
+}
+
+/* ---------- Boot & data loading ---------- */
+async function boot(){
+  await loadAll();
+  document.getElementById("amount").addEventListener("change", () => updateSettings({ amount: Number(amount.value) || 0 }));
+  document.getElementById("start").addEventListener("change", () => updateSettings({ start_month: start.value }));
+  document.getElementById("member").addEventListener("keydown", e => { if (e.key === "Enter") addMember(); });
+}
+
+async function loadAll(){
+  const { data: s } = await sb.from("paluwagan_settings").select("*").eq("id", 1).single();
+  settingsRow = s;
+  amount.value = settingsRow.amount;
+  start.value = settingsRow.start_month || "";
+
+  const { data: m } = await sb.from("paluwagan_members").select("*").order("order_index", { ascending: true });
+  members = m || [];
+
+  const { data: c } = await sb.from("paluwagan_contributions").select("*");
+  contribMap = {};
+  (c || []).forEach(row => { contribMap[row.month_index + ":" + row.member_id] = row; });
+
+  render();
+}
+
+async function updateSettings(fields){
+  const { error } = await sb.from("paluwagan_settings").update(fields).eq("id", 1);
+  if (!error) { Object.assign(settingsRow, fields); render(); }
+}
+
+/* ---------- Members ---------- */
+function generateCode(){
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let s = "";
+  for (let i = 0; i < 5; i++) s += chars[Math.floor(Math.random() * chars.length)];
+  return "PLWGN-" + s;
+}
+
+function generateUsername(name){
+  const base = name.toLowerCase().replace(/[^a-z0-9]/g, "") || "member";
+  return base + Math.floor(100 + Math.random() * 900);
+}
+
+function generatePassword(){
+  const chars = "abcdefghjkmnpqrstuvwxyz23456789";
+  let s = "";
+  for (let i = 0; i < 8; i++) s += chars[Math.floor(Math.random() * chars.length)];
+  return s;
+}
+
+async function addMember(){
+  const n = member.value.trim();
+  if (!n) return;
+  const { error } = await sb.from("paluwagan_members").insert({
+    name: n, order_index: members.length, access_code: generateCode(),
+    username: generateUsername(n), password: generatePassword(), payout_paid: false
+  });
+  if (error) { alert("Could not add member. If this keeps happening, the auto-generated username may have collided — try again."); return; }
+  member.value = "";
+  await loadAll();
+  switchTab("accounts");
+}
+
+async function removeMember(id, name){
+  if (!confirm("Remove " + name + "? Their contribution history will be deleted too.")) return;
+  const { error } = await sb.from("paluwagan_members").delete().eq("id", id);
+  if (error) { alert("Could not remove member."); return; }
+  await loadAll();
+}
+
+async function randomize(){
+  if (members.some(m => m.payout_paid)) { alert("Cannot randomize after payouts begin."); return; }
+  const shuffled = [...members];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  const updates = shuffled.map((m, i) => sb.from("paluwagan_members").update({ order_index: i }).eq("id", m.id));
+  await Promise.all(updates);
+  await loadAll();
+}
+
+async function applyManualOrder(){
+  const rows = [...document.querySelectorAll(".order")];
+  const arr = rows.map((e, i) => ({ id: members[i].id, order: parseInt(e.value) || 9999 }));
+  arr.sort((a, b) => a.order - b.order);
+  const updates = arr.map((x, i) => sb.from("paluwagan_members").update({ order_index: i }).eq("id", x.id));
+  await Promise.all(updates);
+  await loadAll();
+}
+
+async function togglePayout(id, current){
+  const { error } = await sb.from("paluwagan_members").update({ payout_paid: !current }).eq("id", id);
+  if (!error) await loadAll();
+}
+
+async function adminToggleContribution(monthIdx, memberId, cutoff, memberName, monthLabel){
+  const key = monthIdx + ":" + memberId;
+  const existing = contribMap[key];
+  const cutoffLabel = cutoff === "c15" ? "15th" : "30th";
+  const isPaid = existing && existing[cutoff];
+
+  const row = {
+    member_id: memberId,
+    month_index: monthIdx,
+    c15: existing ? existing.c15 : false,
+    c30: existing ? existing.c30 : false,
+    c15_amount: existing ? existing.c15_amount : 0,
+    c30_amount: existing ? existing.c30_amount : 0
+  };
+
+  if (isPaid) {
+    const currentAmt = existing[cutoff + "_amount"] || 0;
+    if (!confirm(`Remove ${memberName}'s recorded ${cutoffLabel} payment of ₱${currentAmt.toLocaleString()} for ${monthLabel}? This can't be undone.`)) return;
+    row[cutoff] = false;
+    row[cutoff + "_amount"] = 0;
+  } else {
+    const amtStr = prompt(`Amount received from ${memberName} — ${cutoffLabel} (${monthLabel}):`, settingsRow.amount);
+    if (amtStr === null) return;
+    const amtNum = Number(amtStr);
+    if (isNaN(amtNum) || amtNum <= 0) { alert("Enter a valid amount."); return; }
+    if (amtNum < Number(settingsRow.amount)) {
+      if (!confirm(`₱${amtNum.toLocaleString()} is less than the expected ₱${Number(settingsRow.amount).toLocaleString()} contribution. Record it anyway as a partial payment?`)) return;
+    }
+    row[cutoff] = true;
+    row[cutoff + "_amount"] = amtNum;
+  }
+
+  const { data, error } = await sb.from("paluwagan_contributions")
+    .upsert(row, { onConflict: "member_id,month_index" })
+    .select().single();
+  if (!error) { contribMap[key] = data; render(); }
+  else alert("Could not save this change.");
+}
+
+/* ---------- Helpers ---------- */
+function getMonths(count){
+  const d = start.value ? new Date(start.value + "-01") : new Date();
+  const list = [];
+  for (let i = 0; i < count; i++) list.push(new Date(d.getFullYear(), d.getMonth() + i, 1));
+  return list;
+}
+
+function currentMonthIndex(count){
+  if (!start.value || count === 0) return 0;
+  const s = new Date(start.value + "-01");
+  const now = new Date();
+  const diff = (now.getFullYear() - s.getFullYear()) * 12 + (now.getMonth() - s.getMonth());
+  return Math.min(Math.max(diff, 0), count - 1);
+}
+
+function switchTab(tab){
+  document.querySelectorAll("nav.tabs button").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
+  document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
+  document.getElementById("panel-" + tab).classList.add("active");
+}
+
+/* ---------- Render ---------- */
+function render(){
+  const amt = Number(amount.value) || 0;
+  const count = members.length;
+  const collection = count * amt;
+  const payout = collection * 2;
+  const months = getMonths(count);
+  const curIdx = currentMonthIndex(count);
+
+  document.getElementById("cycleNo").textContent = count ? (curIdx + 1) + " / " + count : "—";
+
+  const paidOutCount = members.filter(m => m.payout_paid).length;
+  let curPaid15 = 0, curPaid30 = 0, amt15 = 0, amt30 = 0;
+  members.forEach(m => {
+    const row = contribMap[curIdx + ":" + m.id];
+    if (row && row.c15) curPaid15++;
+    if (row && row.c30) curPaid30++;
+    amt15 += (row && row.c15_amount) || 0;
+    amt30 += (row && row.c30_amount) || 0;
+  });
+  const totalCollected = amt15 + amt30;
+
+  document.getElementById("summary").innerHTML = `
+    <div class="stat"><div class="lbl">Members</div><div class="val">${count}</div><div class="sub">enrolled in the pool</div></div>
+    <div class="stat"><div class="lbl">15th Collection</div><div class="val">₱${amt15.toLocaleString()} <span style="font-size:12px;color:var(--muted)">/ ₱${collection.toLocaleString()}</span></div><div class="sub">${count ? curPaid15 + " / " + count + " paid this cycle" : "—"}</div></div>
+    <div class="stat"><div class="lbl">30th Collection</div><div class="val">₱${amt30.toLocaleString()} <span style="font-size:12px;color:var(--muted)">/ ₱${collection.toLocaleString()}</span></div><div class="sub">${count ? curPaid30 + " / " + count + " paid this cycle" : "—"}</div></div>
+    <div class="stat"><div class="lbl">Collected This Cycle</div><div class="val">₱${totalCollected.toLocaleString()} <span style="font-size:12px;color:var(--muted)">/ ₱${payout.toLocaleString()}</span></div><div class="sub">toward this month's payout</div></div>
+    <div class="stat"><div class="lbl">Monthly Payout</div><div class="val green">₱${payout.toLocaleString()}</div><div class="sub">${paidOutCount} of ${count} payouts released</div></div>
+  `;
+
+  renderMembers();
+  renderSchedule(months, count, payout);
+  renderCalendar(months, count, payout, curIdx);
+  renderTracker(months, count);
+  renderAccounts();
+}
+
+function renderMembers(){
+  const list = document.getElementById("memberList");
+  if (!members.length) { list.innerHTML = `<div class="empty">No members yet — add the first contributor above.</div>`; return; }
+  list.innerHTML = "";
+  members.forEach((m, i) => {
+    const div = document.createElement("div");
+    div.className = "member-row";
+    div.innerHTML = `
+      <input class="order" type="number" value="${i + 1}" min="1">
+      <span class="name">${m.name}</span>
+      ${m.payout_paid ? '<span class="member-tag">Payout received</span>' : ''}
+      <span class="link-chip">@${m.username || '—'}</span>
+      <button class="linkbtn" onclick="removeMember('${m.id}','${m.name}')">Remove</button>`;
+    list.appendChild(div);
+  });
+}
+
+function renderSchedule(months, count, payout){
+  const tbody = document.getElementById("tbody");
+  if (!count) { tbody.innerHTML = `<tr><td colspan="5" class="empty" style="border:none">Add members to generate the payout schedule.</td></tr>`; return; }
+  tbody.innerHTML = "";
+  members.forEach((m, i) => {
+    const monthLabel = months[i].toLocaleString('en-US', { month: 'long', year: 'numeric' });
+    tbody.innerHTML += `
+      <tr class="${m.payout_paid ? 'paid-row' : ''}">
+        <td>${i + 1}</td><td>${monthLabel}</td><td>${m.name}</td>
+        <td class="amount-cell">₱${payout.toLocaleString()}</td>
+        <td><button class="status-btn ${m.payout_paid ? 'paid' : 'pending'}" onclick="togglePayout('${m.id}',${m.payout_paid})">${m.payout_paid ? '✓ Paid' : 'Pending'}</button></td>
+      </tr>`;
+  });
+}
+
+function renderCalendar(months, count, payout, curIdx){
+  const grid = document.getElementById("calGrid");
+  if (!count) { grid.innerHTML = `<div class="empty">Nothing to show yet — add members first.</div>`; return; }
+  grid.innerHTML = "";
+  months.forEach((dt, i) => {
+    const monthLabel = dt.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+    let c15 = 0, c30 = 0;
+    members.forEach(m => { const r = contribMap[i + ":" + m.id]; if (r && r.c15) c15++; if (r && r.c30) c30++; });
+    const recipient = members[i];
+    const card = document.createElement("div");
+    card.className = "cal-card";
+    card.innerHTML = `
+      <div class="cal-head"><span class="m">${monthLabel}</span><span class="n">${i === curIdx ? 'CURRENT' : 'Month ' + (i + 1)}</span></div>
+      <div class="cal-body">
+        <div class="cal-dates">
+          <div class="date-chip ${c15 === count ? 'complete' : 'incomplete'}"><div class="d">15</div><div class="lbl">Collection</div><div class="prog">${c15}/${count} paid</div></div>
+          <div class="date-chip ${c30 === count ? 'complete' : 'incomplete'}"><div class="d">30</div><div class="lbl">Collection + Payout</div><div class="prog">${c30}/${count} paid</div></div>
+        </div>
+        <div class="cal-recipient"><span class="who">💰 ${recipient ? recipient.name : '—'}</span><span class="amt">₱${payout.toLocaleString()}</span></div>
+        ${recipient && recipient.payout_paid ? '<div style="margin-top:8px"><span class="stamp">RELEASED</span></div>' : ''}
+      </div>`;
+    grid.appendChild(card);
+  });
+}
+
+function renderTracker(months, count){
+  const table = document.getElementById("trackerTable");
+  if (!count) { table.parentElement.innerHTML = `<div class="empty">Add members to start tracking contributions.</div>`; return; }
+  let head1 = `<tr><th class="member-col" rowspan="2">Member</th>`;
+  let head2 = `<tr>`;
+  months.forEach(dt => {
+    head1 += `<th colspan="2">${dt.toLocaleString('en-US', { month: 'short', year: '2-digit' })}</th>`;
+    head2 += `<th class="month-group-label">15</th><th class="month-group-label">30</th>`;
+  });
+  head1 += `</tr>`; head2 += `</tr>`;
+
+  let body = "";
+  members.forEach(m => {
+    body += `<tr><td class="member-col">${m.name}</td>`;
+    months.forEach((dt, i) => {
+      const r = contribMap[i + ":" + m.id];
+      const monthLabel = dt.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+      const t15 = r && r.c15 ? `Paid ₱${(r.c15_amount || 0).toLocaleString()}` : "Not yet paid";
+      const t30 = r && r.c30 ? `Paid ₱${(r.c30_amount || 0).toLocaleString()}` : "Not yet paid";
+      body += `<td><button class="cutoff-btn ${r && r.c15 ? 'on' : ''}" title="${t15}" onclick="adminToggleContribution(${i},'${m.id}','c15','${m.name.replace(/'/g, "\\'")}','${monthLabel}')">15</button></td>`;
+      body += `<td><button class="cutoff-btn ${r && r.c30 ? 'on' : ''}" title="${t30}" onclick="adminToggleContribution(${i},'${m.id}','c30','${m.name.replace(/'/g, "\\'")}','${monthLabel}')">30</button></td>`;
+    });
+    body += `</tr>`;
+  });
+  table.innerHTML = `<thead>${head1}${head2}</thead><tbody>${body}</tbody>`;
+}
+
+function renderAccounts(){
+  const list = document.getElementById("accountsList");
+  if (!members.length) { list.innerHTML = `<div class="empty">Add members to create their login accounts.</div>`; return; }
+  list.innerHTML = "";
+  members.forEach(m => {
+    const row = document.createElement("div");
+    row.className = "acct-row";
+    row.innerHTML = `
+      <span class="name">${m.name}</span>
+      <input type="text" id="u-${m.id}" value="${m.username || ''}" placeholder="username">
+      <input type="text" id="p-${m.id}" value="${m.password || ''}" placeholder="password">
+      <button onclick="saveAccount('${m.id}')">Save</button>
+      <button class="ghost" onclick="resetPassword('${m.id}')">Reset password</button>`;
+    list.appendChild(row);
+  });
+}
+
+async function saveAccount(id){
+  const username = document.getElementById("u-" + id).value.trim();
+  const password = document.getElementById("p-" + id).value.trim();
+  if (!username || !password) { alert("Username and password can't be empty."); return; }
+  const { error } = await sb.from("paluwagan_members").update({ username, password }).eq("id", id);
+  if (error) alert("Could not save — that username may already be taken.");
+  else { await loadAll(); switchTab("accounts"); alert("Saved."); }
+}
+
+async function resetPassword(id){
+  const newPw = generatePassword();
+  const { error } = await sb.from("paluwagan_members").update({ password: newPw }).eq("id", id);
+  if (error) { alert("Could not reset password."); return; }
+  await loadAll();
+  switchTab("accounts");
+  alert("New password: " + newPw);
+}
+</script>
+</body>
+</html>
