@@ -170,6 +170,8 @@ footer.note{text-align:center; color:var(--muted); font-size:11.5px; margin-top:
 .pay-btn:hover{background:#F3E2B8}
 .pay-btn.done{border-color:var(--green); background:var(--green-bg); cursor:default}
 .pay-btn.done .v{color:var(--green)}
+.pay-btn.pending{border-color:#B3781F; background:#FCEFD9; cursor:default}
+.pay-btn.pending .v{color:#8A5A14}
 
 /* Modal */
 .modal-overlay{position:fixed; inset:0; background:rgba(15,36,56,.5); display:flex; align-items:center; justify-content:center; z-index:50; padding:16px}
