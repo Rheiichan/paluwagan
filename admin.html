@@ -521,8 +521,8 @@ function renderTracker(months, count){
       const monthLabel = dt.toLocaleString('en-US', { month: 'long', year: 'numeric' });
       const t15 = r && r.c15 ? `Paid ₱${(r.c15_amount || 0).toLocaleString()}` : "Not yet paid";
       const t30 = r && r.c30 ? `Paid ₱${(r.c30_amount || 0).toLocaleString()}` : "Not yet paid";
-      body += `<td><button class="cutoff-btn ${r && r.c15 ? 'on' : ''}" title="${t15}" onclick="adminToggleContribution(${i},'${m.id}','c15','${m.name.replace(/'/g, "\\'")}','${monthLabel}')">15</button></td>`;
-      body += `<td><button class="cutoff-btn ${r && r.c30 ? 'on' : ''}" title="${t30}" onclick="adminToggleContribution(${i},'${m.id}','c30','${m.name.replace(/'/g, "\\'")}','${monthLabel}')">30</button></td>`;
+      body += `<td><button class="cutoff-btn ${r && r.c15 ? 'on' : ''}" title="${t15}" onclick="adminToggleContribution(${i},'${m.id}','c15','${m.name.replace(/'/g, "\\'")}','${monthLabel}')">${r && r.c15 ? 'Paid!' : '15'}</button></td>`;
+      body += `<td><button class="cutoff-btn ${r && r.c30 ? 'on' : ''}" title="${t30}" onclick="adminToggleContribution(${i},'${m.id}','c30','${m.name.replace(/'/g, "\\'")}','${monthLabel}')">${r && r.c30 ? 'Paid!' : '30'}</button></td>`;
     });
     body += `</tr>`;
   });
