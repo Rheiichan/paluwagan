@@ -443,8 +443,8 @@ function renderTracker(months, count){
     body += `<tr class="${m.id === me.id ? 'me-row' : ''}"><td class="member-col">${m.name}${m.id === me.id ? ' 💵 (you)' : ''}</td>`;
     months.forEach((dt, i) => {
       const r = contribMap[i + ":" + m.id];
-      body += `<td><span class="cutoff-dot ${r && r.c15 ? 'on' : ''}">15</span></td>`;
-      body += `<td><span class="cutoff-dot ${r && r.c30 ? 'on' : ''}">30</span></td>`;
+      body += `<td><span class="cutoff-dot ${r && r.c15 ? 'on' : ''}">${r && r.c15 ? 'Paid!' : '15'}</span></td>`;
+      body += `<td><span class="cutoff-dot ${r && r.c30 ? 'on' : ''}">${r && r.c30 ? 'Paid!' : '30'}</span></td>`;
     });
     body += `</tr>`;
   });
