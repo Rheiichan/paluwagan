@@ -38,7 +38,10 @@
         <p class="cover-sub">Your personal payment status and the group's shared ledger.</p>
       </div>
       <div style="display:flex; flex-direction:column; align-items:flex-end; gap:8px">
-        <div class="cover-stamp">Cycle No.<b id="cycleNo">—</b></div>
+        <div style="display:flex; gap:8px">
+          <div class="cover-stamp">Round<b id="roundNo">—</b></div>
+          <div class="cover-stamp">Month<b id="cycleNo">—</b></div>
+        </div>
         <button class="ghost" style="background:transparent; border-color:rgba(255,255,255,.3); color:#C7D6E5" onclick="logout()">Log out</button>
       </div>
     </div>
@@ -240,12 +243,12 @@ async function loadAll(){
   members = m || [];
   me = members.find(x => x.id === me.id) || me;
 
-  const { data: c } = await sb.from("paluwagan_contributions").select("*");
+  const { data: c } = await sb.from("paluwagan_contributions").select("*").eq("cycle", settingsRow.cycle_number || 1);
   contribMap = {};
   (c || []).forEach(row => { contribMap[row.month_index + ":" + row.member_id] = row; });
 
   const { data: log } = await sb.from("paluwagan_payment_log")
-    .select("*").eq("member_id", me.id).eq("status", "pending");
+    .select("*").eq("member_id", me.id).eq("status", "pending").eq("cycle", settingsRow.cycle_number || 1);
   myPendingMap = {};
   (log || []).forEach(row => { myPendingMap[row.month_index + ":" + row.type] = row; });
 
@@ -321,6 +324,7 @@ async function confirmPayment(){
   const { error } = await sb.from("paluwagan_payment_log").insert({
     member_id: me.id,
     month_index: curIdx,
+    cycle: settingsRow.cycle_number || 1,
     type: pendingCutoff,
     amount: val,
     status: "pending",
@@ -341,15 +345,17 @@ function render(){
   const curIdx = currentMonthIndex(count);
 
   document.getElementById("cycleNo").textContent = count ? (curIdx + 1) + " / " + count : "—";
+  document.getElementById("roundNo").textContent = "#" + (settingsRow.cycle_number || 1);
 
   const myPos = members.findIndex(m => m.id === me.id);
   const isMyPayoutMonth = myPos === curIdx;
   const myMonthLabel = myPos >= 0 && months[myPos] ? months[myPos].toLocaleString('en-US', { month: 'long', year: 'numeric' }) : "—";
+  const allPaidOut = count > 0 && members.every(m => m.payout_paid);
 
   document.getElementById("greetingCard").innerHTML = `
     <div>
       <div class="hi">${getTimeGreeting()}, ${me.name}!</div>
-      <div class="sub">${isMyPayoutMonth ? "This month is your payout month! 🎉" : "Your payout month is " + myMonthLabel + "."}</div>
+      <div class="sub">${allPaidOut ? "🎉 This round is complete — every member has been paid out." : isMyPayoutMonth ? "This month is your payout month! 🎉" : "Your payout month is " + myMonthLabel + "."}</div>
     </div>
     ${isMyPayoutMonth ? `<div class="payout-flag">${me.payout_paid ? "Payout released ✓" : "Payout pending"}</div>` : ""}
   `;
