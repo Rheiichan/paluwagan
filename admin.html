@@ -36,7 +36,10 @@
         <h1>Paluwagan Tracker</h1>
         <p class="cover-sub">Rotating contribution &amp; payout record — 15th collection, 30th collection + payout.</p>
       </div>
-      <div class="cover-stamp">Cycle No.<b id="cycleNo">—</b></div>
+      <div style="display:flex; gap:10px">
+        <div class="cover-stamp">Round<b id="roundNo">—</b></div>
+        <div class="cover-stamp">Month<b id="cycleNo">—</b></div>
+      </div>
     </div>
     <div class="settings-row">
       <div class="setting">
@@ -53,6 +56,14 @@
       </div>
     </div>
   </header>
+
+  <div id="cycleCompleteBanner" style="display:none; margin-top:16px; background:linear-gradient(155deg,var(--gold) 0%,#B3841F 100%); color:var(--navy-deep); border-radius:12px; padding:18px 22px; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap">
+    <div>
+      <div style="font-family:'Roboto Slab',serif; font-size:18px; font-weight:700">🎉 Cycle Complete!</div>
+      <div style="font-size:13px; margin-top:2px">Every member has received their payout. Start a new round whenever you're ready.</div>
+    </div>
+    <button class="primary" style="background:var(--navy-deep); border-color:var(--navy-deep)" onclick="openNewCycleModal()">Start New Cycle</button>
+  </div>
 
   <div class="summary-grid" id="summary"></div>
 
@@ -71,6 +82,7 @@
       <button class="primary" onclick="addMember()">＋ Add member</button>
       <button onclick="randomize()">🎲 Randomize order</button>
       <button onclick="applyManualOrder()">Save order</button>
+      <button class="ghost" onclick="openNewCycleModal()">🔄 Start New Cycle</button>
     </div>
     <div id="memberList"></div>
 
@@ -118,6 +130,21 @@
   </section>
 
   <footer class="note">Shared cloud ledger — changes sync for everyone with a member link.</footer>
+</div>
+
+<!-- ================= NEW CYCLE MODAL ================= -->
+<div class="modal-overlay" id="newCycleModal" style="display:none">
+  <div class="modal-box" style="max-width:380px">
+    <h3>Start a New Cycle</h3>
+    <p class="modal-sub" id="newCycleSub"></p>
+    <label style="display:block; font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); font-weight:600; text-align:left; margin-top:10px">New start month</label>
+    <input id="newCycleStart" type="month" style="width:100%; margin-bottom:6px">
+    <div class="modal-warn" id="newCycleWarn"></div>
+    <div class="modal-actions">
+      <button class="ghost" onclick="closeNewCycleModal()">Cancel</button>
+      <button class="primary" onclick="startNewCycle()">Start New Cycle</button>
+    </div>
+  </div>
 </div>
 
 <!-- ================= VERIFY CONFIRMATION MODAL ================= -->
@@ -195,7 +222,7 @@ async function loadAll(){
   const { data: m } = await sb.from("paluwagan_members").select("*").order("order_index", { ascending: true });
   members = m || [];
 
-  const { data: c } = await sb.from("paluwagan_contributions").select("*");
+  const { data: c } = await sb.from("paluwagan_contributions").select("*").eq("cycle", settingsRow.cycle_number || 1);
   contribMap = {};
   (c || []).forEach(row => { contribMap[row.month_index + ":" + row.member_id] = row; });
 
@@ -208,6 +235,43 @@ async function loadAll(){
 async function updateSettings(fields){
   const { error } = await sb.from("paluwagan_settings").update(fields).eq("id", 1);
   if (!error) { Object.assign(settingsRow, fields); render(); }
+}
+
+/* ---------- New cycle ---------- */
+function openNewCycleModal(){
+  const count = members.length;
+  const months = getMonths(count);
+  const lastMonth = months.length ? months[months.length - 1] : new Date();
+  const suggested = new Date(lastMonth.getFullYear(), lastMonth.getMonth() + 1, 1);
+  const suggestedVal = suggested.getFullYear() + "-" + String(suggested.getMonth() + 1).padStart(2, "0");
+
+  document.getElementById("newCycleSub").textContent =
+    `This starts Round ${(settingsRow.cycle_number || 1) + 1}. Every member's payout status and this round's contributions reset to zero — the completed round stays saved in Payment History.`;
+  document.getElementById("newCycleStart").value = suggestedVal;
+  document.getElementById("newCycleWarn").textContent = "";
+  document.getElementById("newCycleModal").style.display = "flex";
+}
+
+function closeNewCycleModal(){
+  document.getElementById("newCycleModal").style.display = "none";
+}
+
+async function startNewCycle(){
+  const newStart = document.getElementById("newCycleStart").value;
+  if (!newStart) { document.getElementById("newCycleWarn").textContent = "Pick a start month."; return; }
+
+  const nextCycle = (settingsRow.cycle_number || 1) + 1;
+
+  const { error: sErr } = await sb.from("paluwagan_settings")
+    .update({ cycle_number: nextCycle, start_month: newStart }).eq("id", 1);
+  if (sErr) { document.getElementById("newCycleWarn").textContent = "Could not start the new cycle."; return; }
+
+  const updates = members.map(m => sb.from("paluwagan_members").update({ payout_paid: false }).eq("id", m.id));
+  await Promise.all(updates);
+
+  closeNewCycleModal();
+  await loadAll();
+  switchTab("overview");
 }
 
 /* ---------- Members ---------- */
@@ -280,7 +344,7 @@ async function togglePayout(id, current){
     const idx = members.findIndex(x => x.id === id);
     const amt = (Number(settingsRow.amount) || 0) * members.length * 2;
     await sb.from("paluwagan_payment_log").insert({
-      member_id: id, month_index: idx, type: "payout", amount: amt,
+      member_id: id, month_index: idx, cycle: settingsRow.cycle_number || 1, type: "payout", amount: amt,
       status: "released", source: "admin", verified_at: new Date().toISOString()
     });
   }
@@ -296,6 +360,7 @@ async function adminToggleContribution(monthIdx, memberId, cutoff, memberName, m
   const row = {
     member_id: memberId,
     month_index: monthIdx,
+    cycle: settingsRow.cycle_number || 1,
     c15: existing ? existing.c15 : false,
     c30: existing ? existing.c30 : false,
     c15_amount: existing ? existing.c15_amount : 0,
@@ -318,13 +383,13 @@ async function adminToggleContribution(monthIdx, memberId, cutoff, memberName, m
     row[cutoff] = true;
     row[cutoff + "_amount"] = amtNum;
     await sb.from("paluwagan_payment_log").insert({
-      member_id: memberId, month_index: monthIdx, type: cutoff, amount: amtNum,
+      member_id: memberId, month_index: monthIdx, cycle: settingsRow.cycle_number || 1, type: cutoff, amount: amtNum,
       status: "verified", source: "admin", verified_at: new Date().toISOString()
     });
   }
 
   const { data, error } = await sb.from("paluwagan_contributions")
-    .upsert(row, { onConflict: "member_id,month_index" })
+    .upsert(row, { onConflict: "member_id,month_index,cycle" })
     .select().single();
   if (!error) { contribMap[key] = data; await loadAll(); }
   else alert("Could not save this change.");
@@ -340,6 +405,7 @@ async function verifyPayment(logId){
   const row = {
     member_id: log.member_id,
     month_index: log.month_index,
+    cycle: log.cycle || 1,
     c15: existing ? existing.c15 : false,
     c30: existing ? existing.c30 : false,
     c15_amount: existing ? existing.c15_amount : 0,
@@ -348,7 +414,7 @@ async function verifyPayment(logId){
   row[log.type] = true;
   row[log.type + "_amount"] = log.amount;
 
-  const { error: cErr } = await sb.from("paluwagan_contributions").upsert(row, { onConflict: "member_id,month_index" });
+  const { error: cErr } = await sb.from("paluwagan_contributions").upsert(row, { onConflict: "member_id,month_index,cycle" });
   if (cErr) { alert("Could not verify this payment."); return; }
 
   const verifiedAt = new Date().toISOString();
@@ -379,7 +445,7 @@ async function releasePayoutFor(monthIdx){
 
   const amt = (Number(settingsRow.amount) || 0) * members.length * 2;
   await sb.from("paluwagan_payment_log").insert({
-    member_id: recipient.id, month_index: monthIdx, type: "payout", amount: amt,
+    member_id: recipient.id, month_index: monthIdx, cycle: settingsRow.cycle_number || 1, type: "payout", amount: amt,
     status: "released", source: "admin", verified_at: new Date().toISOString()
   });
   await loadAll();
@@ -417,6 +483,10 @@ function render(){
   const curIdx = currentMonthIndex(count);
 
   document.getElementById("cycleNo").textContent = count ? (curIdx + 1) + " / " + count : "—";
+  document.getElementById("roundNo").textContent = "#" + (settingsRow.cycle_number || 1);
+
+  const allPaidOut = count > 0 && members.every(m => m.payout_paid);
+  document.getElementById("cycleCompleteBanner").style.display = allPaidOut ? "flex" : "none";
 
   const paidOutCount = members.filter(m => m.payout_paid).length;
   let curPaid15 = 0, curPaid30 = 0, amt15 = 0, amt30 = 0;
@@ -574,10 +644,11 @@ function renderHistory(months, count, payout, curIdx){
     pendingList.innerHTML = "";
     pending.forEach(l => {
       const monthLabel = months[l.month_index] ? months[l.month_index].toLocaleString('en-US', { month: 'long', year: 'numeric' }) : ("Month " + (l.month_index + 1));
+      const roundNote = (l.cycle && l.cycle !== (settingsRow.cycle_number || 1)) ? ` · Round ${l.cycle} (past round)` : "";
       const row = document.createElement("div");
       row.className = "member-row";
       row.innerHTML = `
-        <span class="name">${memberName(l.member_id)} — ${typeLabel(l.type)} <span style="color:var(--muted); font-weight:400">(${monthLabel})</span></span>
+        <span class="name">${memberName(l.member_id)} — ${typeLabel(l.type)} <span style="color:var(--muted); font-weight:400">(${monthLabel}${roundNote})</span></span>
         <span class="amount-cell">₱${Number(l.amount).toLocaleString()}</span>
         <span style="color:var(--muted); font-size:12px">${formatLogDate(l.submitted_at)}</span>
         <button class="status-btn paid" onclick="verifyPayment('${l.id}')">✓ Verify</button>
@@ -626,6 +697,7 @@ function renderHistory(months, count, payout, curIdx){
       const isPayout = l.type === "payout";
       rows += `<tr>
         <td>${memberName(l.member_id)}</td>
+        <td>Round ${l.cycle || 1}</td>
         <td>${typeLabel(l.type)}</td>
         <td class="amount-cell">₱${Number(l.amount).toLocaleString()}</td>
         <td>${formatLogDate(l.verified_at || l.submitted_at)}</td>
@@ -634,7 +706,7 @@ function renderHistory(months, count, payout, curIdx){
       </tr>`;
     });
     historyLog.innerHTML = `<div class="tracker-scroll"><table>
-      <thead><tr><th>Member</th><th>Type</th><th>Amount</th><th>Date</th><th>Status</th><th>Source</th></tr></thead>
+      <thead><tr><th>Member</th><th>Round</th><th>Type</th><th>Amount</th><th>Date</th><th>Status</th><th>Source</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>`;
   }
