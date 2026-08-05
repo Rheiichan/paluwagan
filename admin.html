@@ -120,6 +120,21 @@
   <footer class="note">Shared cloud ledger — changes sync for everyone with a member link.</footer>
 </div>
 
+<!-- ================= VERIFY CONFIRMATION MODAL ================= -->
+<div class="modal-overlay" id="verifyModal" style="display:none">
+  <div class="modal-box" style="text-align:center">
+    <div style="font-size:34px; margin-bottom:4px">✅</div>
+    <h3 style="color:var(--green)">Payment Verified</h3>
+    <div style="text-align:left; background:var(--paper); border-radius:8px; padding:14px 16px; margin:14px 0">
+      <div style="display:flex; justify-content:space-between; padding:4px 0; font-size:13.5px"><span style="color:var(--muted)">Member</span><b id="vmName"></b></div>
+      <div style="display:flex; justify-content:space-between; padding:4px 0; font-size:13.5px"><span style="color:var(--muted)">Date</span><b id="vmDate"></b></div>
+      <div style="display:flex; justify-content:space-between; padding:4px 0; font-size:13.5px"><span style="color:var(--muted)">Amount</span><b id="vmAmount" style="color:var(--green)"></b></div>
+    </div>
+    <div class="modal-warn" style="color:var(--green); font-weight:600">✓ This payment now counts toward the cycle's collections.</div>
+    <div class="modal-actions"><button class="primary" style="width:100%" onclick="document.getElementById('verifyModal').style.display='none'">Done</button></div>
+  </div>
+</div>
+
 <script>
 /* ============ CONFIG — paste your Supabase project values here ============ */
 const SUPABASE_URL = "https://wntptuihcrmabvaxznxm.supabase.co";
@@ -336,7 +351,15 @@ async function verifyPayment(logId){
   const { error: cErr } = await sb.from("paluwagan_contributions").upsert(row, { onConflict: "member_id,month_index" });
   if (cErr) { alert("Could not verify this payment."); return; }
 
-  await sb.from("paluwagan_payment_log").update({ status: "verified", verified_at: new Date().toISOString() }).eq("id", logId);
+  const verifiedAt = new Date().toISOString();
+  await sb.from("paluwagan_payment_log").update({ status: "verified", verified_at: verifiedAt }).eq("id", logId);
+
+  const m = members.find(x => x.id === log.member_id);
+  document.getElementById("vmName").textContent = m ? m.name : "Unknown";
+  document.getElementById("vmDate").textContent = formatLogDate(verifiedAt);
+  document.getElementById("vmAmount").textContent = "₱" + Number(log.amount).toLocaleString();
+  document.getElementById("verifyModal").style.display = "flex";
+
   await loadAll();
 }
 
