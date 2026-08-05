@@ -171,6 +171,7 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 let settingsRow = null;
 let members = [];
 let contribMap = {};
+let myPendingMap = {}; // key `${month_index}:${cutoff}` -> pending log row (mine only)
 let me = null;
 let pendingCutoff = null;
 
@@ -243,6 +244,11 @@ async function loadAll(){
   contribMap = {};
   (c || []).forEach(row => { contribMap[row.month_index + ":" + row.member_id] = row; });
 
+  const { data: log } = await sb.from("paluwagan_payment_log")
+    .select("*").eq("member_id", me.id).eq("status", "pending");
+  myPendingMap = {};
+  (log || []).forEach(row => { myPendingMap[row.month_index + ":" + row.type] = row; });
+
   render();
 }
 
@@ -312,25 +318,17 @@ async function confirmPayment(){
   if (val <= 0) { document.getElementById("payWarn").textContent = "Enter a valid amount."; return; }
 
   const curIdx = currentMonthIndex(members.length);
-  const key = curIdx + ":" + me.id;
-  const existing = contribMap[key];
-  const row = {
+  const { error } = await sb.from("paluwagan_payment_log").insert({
     member_id: me.id,
     month_index: curIdx,
-    c15: existing ? existing.c15 : false,
-    c30: existing ? existing.c30 : false,
-    c15_amount: existing ? existing.c15_amount : 0,
-    c30_amount: existing ? existing.c30_amount : 0
-  };
-  row[pendingCutoff] = true;
-  row[pendingCutoff + "_amount"] = val;
+    type: pendingCutoff,
+    amount: val,
+    status: "pending",
+    source: "member"
+  });
 
-  const { data, error } = await sb.from("paluwagan_contributions")
-    .upsert(row, { onConflict: "member_id,month_index" })
-    .select().single();
-
-  if (!error) { contribMap[key] = data; closePayModal(); render(); }
-  else { document.getElementById("payWarn").textContent = "Could not record payment. Try again."; }
+  if (!error) { closePayModal(); await loadAll(); }
+  else { document.getElementById("payWarn").textContent = "Could not submit payment. Try again."; }
 }
 
 /* ---------- Render ---------- */
@@ -357,16 +355,31 @@ function render(){
   `;
 
   const myRow = contribMap[curIdx + ":" + me.id];
-  document.getElementById("paySection").innerHTML = `
-    <button class="pay-btn ${myRow && myRow.c15 ? 'done' : ''}" ${myRow && myRow.c15 ? 'disabled' : ''} onclick="openPayModal('c15')">
-      <div class="t">15th Cutoff</div>
-      <div class="v">${myRow && myRow.c15 ? '✓ Paid ₱' + (myRow.c15_amount || 0).toLocaleString() : 'Tap to record payment'}</div>
-    </button>
-    <button class="pay-btn ${myRow && myRow.c30 ? 'done' : ''}" ${myRow && myRow.c30 ? 'disabled' : ''} onclick="openPayModal('c30')">
-      <div class="t">30th Cutoff</div>
-      <div class="v">${myRow && myRow.c30 ? '✓ Paid ₱' + (myRow.c30_amount || 0).toLocaleString() : 'Tap to record payment'}</div>
-    </button>
-  `;
+  const pend15 = myPendingMap[curIdx + ":c15"];
+  const pend30 = myPendingMap[curIdx + ":c30"];
+
+  function payBtnHtml(cutoff, verifiedRow, pending){
+    const label = cutoff === "c15" ? "15th Cutoff" : "30th Cutoff";
+    if (verifiedRow && verifiedRow[cutoff]) {
+      return `<button class="pay-btn done" disabled>
+        <div class="t">${label}</div>
+        <div class="v">✓ Paid ₱${(verifiedRow[cutoff + "_amount"] || 0).toLocaleString()}</div>
+      </button>`;
+    }
+    if (pending) {
+      return `<button class="pay-btn pending" disabled>
+        <div class="t">${label}</div>
+        <div class="v">⏳ Pending verification — ₱${Number(pending.amount).toLocaleString()}</div>
+      </button>`;
+    }
+    return `<button class="pay-btn" onclick="openPayModal('${cutoff}')">
+      <div class="t">${label}</div>
+      <div class="v">Tap to record payment</div>
+    </button>`;
+  }
+
+  document.getElementById("paySection").innerHTML =
+    payBtnHtml("c15", myRow, pend15) + payBtnHtml("c30", myRow, pend30);
 
   let c15Count = 0, c30Count = 0, amt15 = 0, amt30 = 0;
   members.forEach(m => {
