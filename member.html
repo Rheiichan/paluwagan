@@ -406,7 +406,7 @@ function render(){
 
   renderCalendar(months, count, payout, curIdx);
   renderTracker(months, count);
-  renderSchedule(months, count, payout);
+  renderSchedule(months, count, payout, curIdx);
 }
 
 function renderCalendar(months, count, payout, curIdx){
@@ -457,16 +457,26 @@ function renderTracker(months, count){
   table.innerHTML = `<thead>${head1}${head2}</thead><tbody>${body}</tbody>`;
 }
 
-function renderSchedule(months, count, payout){
+function renderSchedule(months, count, payout, curIdx){
   const tbody = document.getElementById("tbody");
+  const perMemberTarget = (Number(settingsRow.amount) || 0) * 2;
   tbody.innerHTML = "";
   members.forEach((m, i) => {
     const monthLabel = months[i].toLocaleString('en-US', { month: 'long', year: 'numeric' });
+    let shortfall = 0;
+    if (!m.payout_paid && i <= curIdx) {
+      let collected = 0;
+      members.forEach(mm => { const r = contribMap[i + ":" + mm.id]; collected += ((r && r.c15_amount) || 0) + ((r && r.c30_amount) || 0); });
+      shortfall = Math.max(0, (perMemberTarget * count) - collected);
+    }
     tbody.innerHTML += `
       <tr class="${m.payout_paid ? 'paid-row' : ''} ${m.id === me.id ? 'me-row' : ''}">
         <td>${i + 1}</td><td>${monthLabel}</td><td>${m.name}${m.id === me.id ? ' 💵 (you)' : ''}</td>
         <td class="amount-cell">₱${payout.toLocaleString()}</td>
-        <td><span class="status-pill ${m.payout_paid ? 'paid' : 'pending'}">${m.payout_paid ? '✓ Paid' : 'Pending'}</span></td>
+        <td>
+          <span class="status-pill ${m.payout_paid ? 'paid' : 'pending'}">${m.payout_paid ? '✓ Paid' : 'Pending'}</span>
+          ${shortfall > 0 ? `<div style="color:var(--red); font-size:11px; margin-top:4px; white-space:nowrap">⚠ ₱${shortfall.toLocaleString()} still needed</div>` : ''}
+        </td>
       </tr>`;
   });
 }
