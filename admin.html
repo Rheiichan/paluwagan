@@ -116,7 +116,7 @@
     <h3 class="section-title">Awaiting verification</h3>
     <div id="pendingList"></div>
 
-    <h3 class="section-title" style="margin-top:22px">Ready to release</h3>
+    <h3 class="section-title" style="margin-top:22px">Release Payouts</h3>
     <div id="releaseList"></div>
 
     <h3 class="section-title" style="margin-top:22px">History log</h3>
@@ -125,7 +125,7 @@
 
   <section class="panel" id="panel-accounts">
     <h3 class="section-title">Member login accounts</h3>
-    <p style="color:var(--muted); font-size:13px; margin-top:-6px">Each member logs in at <code>member.html</code> with their username and password below. Share these with them directly. Edit and click Save to change either one.</p>
+    <p style="color:var(--muted); font-size:13px; margin-top:-6px">Each member logs in at <code>member.html</code> with their username and password below. You can also fix a misspelled name here. Edit any field and click Save.</p>
     <div id="accountsList"></div>
   </section>
 
@@ -458,14 +458,22 @@ async function declinePayment(logId, memberName, amount){
 async function releasePayoutFor(monthIdx){
   const recipient = members[monthIdx];
   if (!recipient) return;
-  if (!confirm(`Release ₱${((Number(settingsRow.amount) || 0) * members.length * 2).toLocaleString()} to ${recipient.name}?`)) return;
+
+  const target = (Number(settingsRow.amount) || 0) * members.length * 2;
+  let collected = 0;
+  members.forEach(mm => { const r = contribMap[monthIdx + ":" + mm.id]; collected += ((r && r.c15_amount) || 0) + ((r && r.c30_amount) || 0); });
+  const shortfall = target - collected;
+
+  const msg = shortfall > 0
+    ? `Only ₱${collected.toLocaleString()} of ₱${target.toLocaleString()} has been collected — ₱${shortfall.toLocaleString()} is still short. Release ₱${target.toLocaleString()} to ${recipient.name} anyway?`
+    : `Release ₱${target.toLocaleString()} to ${recipient.name}?`;
+  if (!confirm(msg)) return;
 
   const { error } = await sb.from("paluwagan_members").update({ payout_paid: true }).eq("id", recipient.id);
   if (error) { alert("Could not release the payout."); return; }
 
-  const amt = (Number(settingsRow.amount) || 0) * members.length * 2;
   await sb.from("paluwagan_payment_log").insert({
-    member_id: recipient.id, month_index: monthIdx, cycle: settingsRow.cycle_number || 1, type: "payout", amount: amt,
+    member_id: recipient.id, month_index: monthIdx, cycle: settingsRow.cycle_number || 1, type: "payout", amount: target,
     status: "released", source: "admin", verified_at: new Date().toISOString()
   });
   await loadAll();
@@ -528,7 +536,7 @@ function render(){
   `;
 
   renderMembers();
-  renderSchedule(months, count, payout);
+  renderSchedule(months, count, payout, curIdx);
   renderCalendar(months, count, payout, curIdx);
   renderTracker(months, count);
   renderAccounts();
@@ -552,17 +560,27 @@ function renderMembers(){
   });
 }
 
-function renderSchedule(months, count, payout){
+function renderSchedule(months, count, payout, curIdx){
   const tbody = document.getElementById("tbody");
   if (!count) { tbody.innerHTML = `<tr><td colspan="5" class="empty" style="border:none">Add members to generate the payout schedule.</td></tr>`; return; }
+  const perMemberTarget = (Number(settingsRow.amount) || 0) * 2;
   tbody.innerHTML = "";
   members.forEach((m, i) => {
     const monthLabel = months[i].toLocaleString('en-US', { month: 'long', year: 'numeric' });
+    let shortfall = 0;
+    if (!m.payout_paid && i <= curIdx) {
+      let collected = 0;
+      members.forEach(mm => { const r = contribMap[i + ":" + mm.id]; collected += ((r && r.c15_amount) || 0) + ((r && r.c30_amount) || 0); });
+      shortfall = Math.max(0, (perMemberTarget * count) - collected);
+    }
     tbody.innerHTML += `
       <tr class="${m.payout_paid ? 'paid-row' : ''}">
         <td>${i + 1}</td><td>${monthLabel}</td><td>${m.name}</td>
         <td class="amount-cell">₱${payout.toLocaleString()}</td>
-        <td><button class="status-btn ${m.payout_paid ? 'paid' : 'pending'}" onclick="togglePayout('${m.id}',${m.payout_paid})">${m.payout_paid ? '✓ Paid' : 'Pending'}</button></td>
+        <td>
+          <button class="status-btn ${m.payout_paid ? 'paid' : 'pending'}" onclick="togglePayout('${m.id}',${m.payout_paid})">${m.payout_paid ? '✓ Paid' : 'Pending'}</button>
+          ${shortfall > 0 ? `<div style="color:var(--red); font-size:11px; margin-top:4px; white-space:nowrap">⚠ ₱${shortfall.toLocaleString()} short</div>` : ''}
+        </td>
       </tr>`;
   });
 }
@@ -627,7 +645,7 @@ function renderAccounts(){
     const row = document.createElement("div");
     row.className = "acct-row";
     row.innerHTML = `
-      <span class="name">${m.name}</span>
+      <input type="text" id="n-${m.id}" value="${m.name}" placeholder="name" style="flex:0 0 130px; font-weight:600">
       <input type="text" id="u-${m.id}" value="${m.username || ''}" placeholder="username">
       <input type="text" id="p-${m.id}" value="${m.password || ''}" placeholder="password">
       <button onclick="saveAccount('${m.id}')">Save</button>
@@ -677,30 +695,43 @@ function renderHistory(months, count, payout, curIdx){
     });
   }
 
-  // --- Ready to release ---
+  // --- Release payouts (current & past months not yet paid out) ---
   const releaseList = document.getElementById("releaseList");
-  const target = count * (Number(settingsRow.amount) || 0) * 2;
+  const perMemberTarget = (Number(settingsRow.amount) || 0) * 2;
+  const target = count * perMemberTarget;
   const releasable = [];
   members.forEach((m, i) => {
     if (m.payout_paid) return;
-    // Sum verified contributions across ALL members for month i, not just this member.
+    if (i > curIdx) return; // don't surface future months that haven't started collecting yet
     let collected = 0;
-    members.forEach(mm => { const r = contribMap[i + ":" + mm.id]; collected += ((r && r.c15_amount) || 0) + ((r && r.c30_amount) || 0); });
-    if (collected >= target && target > 0) releasable.push({ member: m, monthIdx: i, collected });
+    const missing = [];
+    members.forEach(mm => {
+      const r = contribMap[i + ":" + mm.id];
+      const paid = ((r && r.c15_amount) || 0) + ((r && r.c30_amount) || 0);
+      collected += paid;
+      const shortfall = perMemberTarget - paid;
+      if (shortfall > 0) missing.push({ name: mm.name, shortfall });
+    });
+    releasable.push({ member: m, monthIdx: i, collected, missing });
   });
 
   if (!releasable.length) {
-    releaseList.innerHTML = `<div class="empty">No payout is fully funded yet.</div>`;
+    releaseList.innerHTML = `<div class="empty">No payout is due yet.</div>`;
   } else {
     releaseList.innerHTML = "";
     releasable.forEach(r => {
       const monthLabel = months[r.monthIdx] ? months[r.monthIdx].toLocaleString('en-US', { month: 'long', year: 'numeric' }) : ("Month " + (r.monthIdx + 1));
+      const complete = r.missing.length === 0;
       const row = document.createElement("div");
       row.className = "member-row";
+      row.style.flexWrap = "wrap";
       row.innerHTML = `
         <span class="name">${r.member.name} <span style="color:var(--muted); font-weight:400">(${monthLabel})</span></span>
-        <span class="amount-cell">₱${r.collected.toLocaleString()} collected</span>
-        <button class="primary" onclick="releasePayoutFor(${r.monthIdx})">Release Payout</button>`;
+        <span class="amount-cell">₱${r.collected.toLocaleString()} / ₱${target.toLocaleString()} collected</span>
+        <button class="primary" onclick="releasePayoutFor(${r.monthIdx})">Release Payout</button>
+        ${!complete ? `<div style="flex-basis:100%; margin-top:6px; background:#FBEAE3; border:1px solid var(--red); border-radius:8px; padding:8px 12px; font-size:12.5px; color:var(--red)">
+          ⚠ Still need to collect ${r.missing.map(x => `₱${x.shortfall.toLocaleString()} from ${x.name}`).join(", ")}.
+        </div>` : ''}`;
       releaseList.appendChild(row);
     });
   }
@@ -733,10 +764,12 @@ function renderHistory(months, count, payout, curIdx){
 }
 
 async function saveAccount(id){
+  const name = document.getElementById("n-" + id).value.trim();
   const username = document.getElementById("u-" + id).value.trim();
   const password = document.getElementById("p-" + id).value.trim();
+  if (!name) { alert("Name can't be empty."); return; }
   if (!username || !password) { alert("Username and password can't be empty."); return; }
-  const { error } = await sb.from("paluwagan_members").update({ username, password }).eq("id", id);
+  const { error } = await sb.from("paluwagan_members").update({ name, username, password }).eq("id", id);
   if (error) alert("Could not save — that username may already be taken.");
   else { await loadAll(); switchTab("accounts"); alert("Saved."); }
 }
